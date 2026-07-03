@@ -6,6 +6,9 @@
   color-scheme: dark;
   background: #0b0c0c;
   color: #f3efe5;
+  --font-sans: Arial, "Helvetica Neue", sans-serif;
+  --font-display: Georgia, "Times New Roman", serif;
+  --font-mono: "Courier New", Courier, monospace;
 }
 
 * { box-sizing: border-box; }
@@ -13,10 +16,10 @@ html { scroll-behavior: auto; }
 body {
   margin: 0;
   min-height: 100vh;
+  font-family: var(--font-sans);
   background:
     radial-gradient(circle at 50% 0%, rgba(216, 155, 53, 0.08), transparent 34rem),
     linear-gradient(180deg, #0b0c0c 0%, #111311 48%, #080909 100%);
-  font-family: var(--font-sans), Arial, sans-serif;
 }
 
 ::selection { background: #d89b35; color: #0b0c0c; }
