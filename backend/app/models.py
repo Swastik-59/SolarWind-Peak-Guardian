@@ -1,3 +1,4 @@
+from typing import Optional
 from pydantic import BaseModel, Field
 
 
@@ -33,7 +34,7 @@ class GridStatus(BaseModel):
     renewable_percentage: float
     demand_mw: float
     served_mw: float
-    stability_state: str
+    stability_state: str        # "stable" | "watch" | "intervention"
     voltage_kv: float
     ai_action: str
 
@@ -120,8 +121,15 @@ class SimulationResponse(BaseModel):
 
 class TelemetryFrame(BaseModel):
     tick: int
+    timestamp: str
     grid: GridStatus
     storage: StorageStatus
     renewables: RenewablesResponse
     carbon: CarbonResponse
     cost: CostResponse
+
+
+class ReportRequest(BaseModel):
+    peak_demand_mw: float = Field(default=320, ge=50, le=500)
+    include_financials: bool = True
+    include_carbon: bool = True
