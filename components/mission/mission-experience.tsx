@@ -33,6 +33,7 @@ const fallback: MissionData = {
 export function MissionExperience() {
   const [data, setData] = useState<MissionData>(fallback);
   const [activeUseCase, setActiveUseCase] = useState(0);
+  const [reportBusy, setReportBusy] = useState(false);
   const { telemetry, setTelemetry, running, startSimulation, finishSimulation, simulation } = useMissionStore();
   const live = telemetry ?? { tick: 0, grid: data.grid, storage: data.storage, renewables: data.renewables, carbon: data.carbon, cost: data.cost };
   const { scrollYProgress } = useScroll();
@@ -55,6 +56,51 @@ export function MissionExperience() {
       outcomes: { co2_avoided_tonnes: 411, diesel_cost_avoided_usd: 58240, hres_cost_usd: 23680, renewable_peak_coverage_percentage: 91.2 }
     }));
     setTimeout(() => finishSimulation(result), 900);
+  };
+
+  const generateReport = async () => {
+    setReportBusy(true);
+    try {
+      const report = await api.report(340);
+      const content = buildReportHtml(report as Record<string, unknown>);
+      const frame = document.createElement("iframe");
+      frame.setAttribute("aria-hidden", "true");
+      frame.style.position = "fixed";
+      frame.style.right = "0";
+      frame.style.bottom = "0";
+      frame.style.width = "0";
+      frame.style.height = "0";
+      frame.style.border = "0";
+      frame.srcdoc = content;
+
+      const cleanup = () => {
+        frame.removeEventListener("load", handleLoad);
+        frame.removeEventListener("afterprint", cleanup);
+        window.removeEventListener("afterprint", cleanup);
+        frame.remove();
+      };
+
+      const handleLoad = () => {
+        const frameWindow = frame.contentWindow;
+        if (!frameWindow) {
+          cleanup();
+          return;
+        }
+
+        frameWindow.focus();
+        frameWindow.print();
+
+        frameWindow.addEventListener("afterprint", cleanup, { once: true });
+        window.addEventListener("afterprint", cleanup, { once: true });
+      };
+
+      frame.addEventListener("load", handleLoad, { once: true });
+      document.body.appendChild(frame);
+    } catch (error) {
+      window.alert(`Report generation failed: ${String(error)}`);
+    } finally {
+      setReportBusy(false);
+    }
   };
 
   return (
@@ -175,7 +221,7 @@ export function MissionExperience() {
 
       <Section id="reports" kicker="Reports + Settings" title="Generate a judge-ready operating report and tune the mission assumptions.">
         <div className="grid gap-8 lg:grid-cols-2">
-          <Report simulation={simulation} />
+          <Report simulation={simulation} onGenerate={generateReport} busy={reportBusy} />
           <SettingsPanel />
         </div>
         <div className="mt-8 grid gap-3">
@@ -246,8 +292,119 @@ function BigNumber({ label, value }: { label: string; value: string }) {
   return <div className="border-t hairline pt-5"><div className="font-display text-5xl md:text-6xl">{value}</div><div className="mt-4 font-mono text-xs uppercase tracking-[.18em] text-bone/46">{label}</div></div>;
 }
 
-function Report({ simulation }: { simulation?: Simulation }) {
-  return <Panel><Download className="text-amber" /><h3 className="mt-8 font-display text-4xl">Simulation report</h3><p className="mt-4 leading-7 text-bone/64">Generates an operator summary with phase timeline, EMS decisions, carbon savings, cost delta, and future roadmap for microgrids and V2G vehicle storage.</p><button className="mt-8 border hairline px-5 py-3 font-mono text-xs uppercase tracking-[.16em] text-amber">Prepare PDF Summary</button><div className="mt-6 text-sm text-bone/48">Last run: {simulation ? simulation.scenario : "No simulation run yet"}</div></Panel>;
+function Report({ simulation, onGenerate, busy }: { simulation?: Simulation; onGenerate: () => void; busy: boolean }) {
+  return <Panel><Download className="text-amber" /><h3 className="mt-8 font-display text-4xl">Simulation report</h3><p className="mt-4 leading-7 text-bone/64">Generates an operator summary with phase timeline, EMS decisions, carbon savings, cost delta, and future roadmap for microgrids and V2G vehicle storage.</p><button onClick={onGenerate} disabled={busy} className="mt-8 border hairline px-5 py-3 font-mono text-xs uppercase tracking-[.16em] text-amber disabled:opacity-60">{busy ? "Preparing PDF..." : "Prepare PDF Summary"}</button><div className="mt-6 text-sm text-bone/48">Last run: {simulation ? simulation.scenario : "No simulation run yet"}</div></Panel>;
+}
+
+function buildReportHtml(report: Record<string, unknown>) {
+  const simulation = report.simulation as { phases?: Array<{ window?: string; name?: string; description?: string }> ; ems_decisions?: Array<{ timestamp?: string; decision?: string; reason?: string }> } | undefined;
+  const performance = report.performance as Record<string, unknown> | undefined;
+  const carbon = report.carbon as Record<string, unknown> | null | undefined;
+  const economics = report.economics as Record<string, unknown> | null | undefined;
+  const forecastPoints = Array.isArray(report.forecast_points) ? report.forecast_points as Array<Record<string, unknown>> : [];
+
+  const rows = (items: Array<[string, unknown]>) => items.map(([label, value]) => `<tr><th style="text-align:left;padding:8px 12px;border-bottom:1px solid #2a2a2a;color:#d89b35;">${escapeHtml(label)}</th><td style="padding:8px 12px;border-bottom:1px solid #2a2a2a;">${escapeHtml(String(value ?? "—"))}</td></tr>`).join("");
+
+  const phaseCards = (simulation?.phases ?? []).map((phase) => `<section style="border:1px solid #2a2a2a;padding:16px;margin:0 0 12px 0;"><div style="color:#d89b35;font-size:12px;letter-spacing:.14em;text-transform:uppercase;">${escapeHtml(phase.window ?? "")}</div><h3 style="margin:8px 0 6px;font-size:20px;">${escapeHtml(phase.name ?? "")}</h3><p style="margin:0;color:#c8c1b5;line-height:1.6;">${escapeHtml(phase.description ?? "")}</p></section>`).join("");
+  const decisions = (simulation?.ems_decisions ?? []).map((item) => `<section style="border-left:3px solid #d89b35;padding:0 0 0 12px;margin:0 0 12px 0;"><div style="color:#d89b35;font-size:12px;">${escapeHtml(item.timestamp ?? "")}</div><div style="font-weight:600;margin:4px 0;">${escapeHtml(item.decision ?? "")}</div><div style="color:#c8c1b5;line-height:1.6;">${escapeHtml(item.reason ?? "")}</div></section>`).join("");
+  const forecastTable = forecastPoints.slice(0, 7).map((point) => `<tr><td>${escapeHtml(String(point.time ?? ""))}</td><td>${escapeHtml(String(point.demand_mw ?? ""))}</td><td>${escapeHtml(String(point.solar_mw ?? ""))}</td><td>${escapeHtml(String(point.wind_mw ?? ""))}</td><td>${escapeHtml(String(point.battery_mw ?? ""))}</td><td>${escapeHtml(String(point.caes_mw ?? ""))}</td><td>${escapeHtml(String(point.frequency_hz ?? ""))}</td></tr>`).join("");
+
+  return `<!doctype html>
+  <html>
+    <head>
+      <meta charset="utf-8" />
+      <title>SolarWind Peak Guardian Report</title>
+      <style>
+        @page { size: A4; margin: 18mm; }
+        body { margin: 0; background: #0b0c0c; color: #f3efe5; font-family: Georgia, serif; }
+        .page { padding: 28px; }
+        .panel { border: 1px solid #2a2a2a; padding: 18px; margin-bottom: 18px; background: #111313; }
+        h1, h2, h3 { margin: 0; font-weight: 600; }
+        h1 { font-size: 28px; margin-bottom: 8px; }
+        h2 { font-size: 18px; margin-bottom: 14px; color: #d89b35; }
+        p { margin: 0 0 12px 0; line-height: 1.6; }
+        table { width: 100%; border-collapse: collapse; font-size: 13px; }
+        th, td { border-bottom: 1px solid #2a2a2a; padding: 8px 10px; vertical-align: top; }
+        th { color: #d89b35; text-align: left; width: 38%; }
+        .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+        .muted { color: #c8c1b5; }
+        .small { font-size: 12px; letter-spacing: .08em; text-transform: uppercase; color: #d89b35; }
+      </style>
+    </head>
+    <body>
+      <div class="page">
+        <div class="panel">
+          <div class="small">SolarWind Peak Guardian</div>
+          <h1>Judgement-ready operating report</h1>
+          <p class="muted">Generated at ${escapeHtml(String(report.generated_at ?? ""))}</p>
+          <p>${escapeHtml(String(report.operating_condition ?? ""))}</p>
+        </div>
+        <div class="grid">
+          <div class="panel">
+            <h2>System Summary</h2>
+            <table>${rows([
+              ["System", report.system],
+              ["Renewable Sources", Array.isArray(report.renewable_sources) ? (report.renewable_sources as string[]).join(", ") : "—"],
+              ["SDG Alignment", Array.isArray(report.sdg_alignment) ? (report.sdg_alignment as string[]).join(", ") : "—"],
+            ])}</table>
+          </div>
+          <div class="panel">
+            <h2>Performance</h2>
+            <table>${rows([
+              ["Grid Stability Score", performance?.grid_stability_score],
+              ["Renewable Peak Coverage", performance?.renewable_peak_coverage_percentage],
+              ["Efficiency Gain", performance?.efficiency_gain_percentage],
+              ["Brownout Risk Reduction", performance?.brownout_risk_reduction_percentage],
+            ])}</table>
+          </div>
+        </div>
+        <div class="grid">
+          <div class="panel">
+            <h2>Carbon</h2>
+            <table>${rows(carbon ? [
+              ["CO2 Avoided Year", carbon.co2_avoided_tonnes_year],
+              ["CO2 Avoided Today", carbon.co2_avoided_tonnes_today],
+              ["Diesel MWh Displaced", carbon.diesel_mwh_displaced],
+            ] : [["Carbon", "Not included"]])}</table>
+          </div>
+          <div class="panel">
+            <h2>Economics</h2>
+            <table>${rows(economics ? [
+              ["HRES LCOE", economics.hres_lcoe_usd_mwh],
+              ["Diesel Peaker", economics.diesel_peaker_usd_mwh],
+              ["Annual Savings", economics.annual_savings_usd_million],
+              ["Payback Years", economics.payback_years],
+            ] : [["Economics", "Not included"]])}</table>
+          </div>
+        </div>
+        <div class="panel">
+          <h2>Simulation Phases</h2>
+          ${phaseCards || '<p class="muted">No phases available.</p>'}
+        </div>
+        <div class="panel">
+          <h2>EMS Decisions</h2>
+          ${decisions || '<p class="muted">No decisions available.</p>'}
+        </div>
+        <div class="panel">
+          <h2>Forecast Snapshot</h2>
+          <table>
+            <thead><tr><th>Time</th><th>Demand</th><th>Solar</th><th>Wind</th><th>Battery</th><th>CAES</th><th>Hz</th></tr></thead>
+            <tbody>${forecastTable}</tbody>
+          </table>
+        </div>
+      </div>
+    </body>
+  </html>`;
+}
+
+function escapeHtml(value: string) {
+  return value.replace(/[&<>"']/g, (character) => ({
+    "&": "&amp;",
+    "<": "&lt;",
+    ">": "&gt;",
+    '"': "&quot;",
+    "'": "&#39;",
+  })[character] ?? character);
 }
 
 function SettingsPanel() {
